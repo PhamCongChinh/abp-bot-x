@@ -13,7 +13,7 @@ from playwright.async_api import async_playwright
 
 CHROME_EXECUTABLE = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 PROFILE_FILE      = "chrome_profile.json"
-KEYWORD           = "Biểu tình"
+KEYWORD           = "Bộ trưởng Bộ Công an"
 
 
 # ── XPost class ───────────────────────────────────────────────────────────────
@@ -36,6 +36,8 @@ class XPost:
     def new(self, data: dict) -> dict:
         screen_name = data.get("screen_name", "")
         post_id     = data.get("id_str", None)
+        image_url   = data.get("image_url", "")
+        media_urls  = data.get("media_urls", [])
         return {
             "doc_type":         1,
             "crawl_source":     self.crawl_source,
@@ -47,7 +49,7 @@ class XPost:
             "description":      data.get("full_text", None),
             "content":          data.get("full_text", None),
             "url":              self._build_post_url(screen_name, post_id),
-            "media_urls":       "[]",
+            "media_urls":       json.dumps(media_urls, ensure_ascii=False),
             "comments":         data.get("replies", 0),
             "shares":           data.get("retweets", 0),
             "reactions":        data.get("likes", 0),
@@ -72,6 +74,14 @@ class XPost:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+def clean_text(text: str) -> str:
+    """Thay thế các ký tự xuống dòng bằng dấu cách."""
+    if not text:
+        return text
+    import re
+    return re.sub(r'\n+', ' ', text).strip()
+
+
 def to_unix(twitter_date: str) -> int:
     """'Wed Jun 26 06:53:32 +0000 2024' → unix timestamp"""
     if not twitter_date:
@@ -108,10 +118,17 @@ def extract_tweets(data: dict) -> list:
                 user_core   = user_result.get("core", {})
                 avatar      = user_result.get("avatar", {})
 
+                # Lấy media URLs từ tweet (ảnh/video đính kèm)
+                media_list = (
+                    legacy.get("extended_entities", {}).get("media", [])
+                    or legacy.get("entities", {}).get("media", [])
+                )
+                media_urls = [m.get("media_url_https", "") for m in media_list if m.get("media_url_https")]
+
                 tweets.append({
                     "id_str":                  legacy.get("id_str", ""),
                     "user_id_str":             legacy.get("user_id_str", ""),
-                    "full_text":               legacy.get("full_text", ""),
+                    "full_text":               clean_text(legacy.get("full_text", "")),
                     "created_at":              legacy.get("created_at", ""),
                     "created_at_unix":         to_unix(legacy.get("created_at", "")),
                     "likes":                   legacy.get("favorite_count", 0),
@@ -131,6 +148,7 @@ def extract_tweets(data: dict) -> list:
                     "normal_followers_count":  user_legacy.get("normal_followers_count", 0),
                     "media_count":             user_legacy.get("media_count", 0),
                     "has_graduated_access":    user_result.get("has_graduated_access", False),
+                    "media_urls":              media_urls,
                 })
     except (KeyError, TypeError):
         pass
