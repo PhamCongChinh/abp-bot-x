@@ -1,0 +1,13 @@
+# Virtual environment
+.venv/
+
+# Chrome session
+chrome_profile.json
+
+# Data output
+data/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
