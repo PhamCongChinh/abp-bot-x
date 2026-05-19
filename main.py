@@ -45,6 +45,15 @@ async def post_to_es_unclassified(content: list) -> dict:
         "data":   content,
         "upsert": True,
     }
+
+    # Lưu ra data/data.json
+    output_dir = Path("data")
+    output_dir.mkdir(exist_ok=True)
+    output_file = output_dir / "data.json"
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"[OK] Đã lưu {total} posts ra: {output_file}")
+
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
             response = await client.post(url_unclassified, json=data)
@@ -280,14 +289,6 @@ async def run():
                 print(f"[API] error: {result['error']}")
         else:
             print("[WARN] Không có tweet nào để push")
-
-        # Lưu ra data/data.json để debug
-        output_dir = Path("data")
-        output_dir.mkdir(exist_ok=True)
-        output_file = output_dir / "data.json"
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(all_tweets, f, ensure_ascii=False, indent=2)
-        print(f"[OK] Đã lưu {len(all_tweets)} posts ra: {output_file}")
 
         input("\nNhấn Enter để đóng...")
         await browser.close()
