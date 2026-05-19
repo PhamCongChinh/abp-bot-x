@@ -5,25 +5,82 @@ Playwright - intercept X.com SearchTimeline API response.
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from typing import Optional
 from urllib.parse import quote
+import httpx
+from dotenv import load_dotenv
 from playwright.async_api import async_playwright
+
+load_dotenv()
 
 CHROME_EXECUTABLE = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 PROFILE_FILE      = "chrome_profile.json"
 KEYWORD           = "Bộ trưởng Bộ Công an"
 
+# ── API config ────────────────────────────────────────────────────────────────
+HTTP_TIMEOUT = 30.0
+ES_INDEX     = "not_classify_org_posts"
+
+
+def _get_api_master() -> str:
+    return os.environ.get("API_MASTER_URL", "http://localhost:8000")
+
+
+def _build_urls() -> tuple[str, str]:
+    base = _get_api_master()
+    return (
+        f"{base}/api/v1/posts/insert-unclassified-org-posts",
+        f"{base}/api/v1/posts/insert-posts",
+    )
+
+
+async def post_to_es_unclassified(content: list) -> dict:
+    url_unclassified, _ = _build_urls()
+    total = len(content)
+    data  = {
+        "index":  ES_INDEX,
+        "data":   content,
+        "upsert": True,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            response = await client.post(url_unclassified, json=data)
+            if response.status_code >= 400:
+                return {
+                    "success":  False,
+                    "total":    total,
+                    "status":   response.status_code,
+                    "error":    response.text,
+                    "response": None,
+                }
+            return {
+                "success":  True,
+                "total":    total,
+                "status":   response.status_code,
+                "error":    None,
+                "response": response.json(),
+            }
+    except Exception as e:
+        return {
+            "success":  False,
+            "total":    total,
+            "status":   None,
+            "error":    str(e),
+            "response": None,
+        }
+
 
 # ── XPost class ───────────────────────────────────────────────────────────────
 class XPost:
-    BASE_URL         = "https://x.com"
-    crawl_source     = 3
+    BASE_URL          = "https://x.com"
+    crawl_source      = 3
     crawl_source_code = "x"
-    auth_type        = 1
-    source_type      = 6
-    crawl_bot        = "x-1"
+    auth_type         = 1
+    source_type       = 6
+    crawl_bot         = "x-1"
 
     def _build_post_url(self, screen_name: str, post_id: Optional[str]) -> str:
         if not post_id:
@@ -36,40 +93,39 @@ class XPost:
     def new(self, data: dict) -> dict:
         screen_name = data.get("screen_name", "")
         post_id     = data.get("id_str", None)
-        image_url   = data.get("image_url", "")
         media_urls  = data.get("media_urls", [])
         return {
-            "doc_type":         1,
-            "crawl_source":     self.crawl_source,
+            "doc_type":          1,
+            "crawl_source":      self.crawl_source,
             "crawl_source_code": self.crawl_source_code,
-            "pub_time":         data.get("created_at_unix", 0),
-            "crawl_time":       int(datetime.now().timestamp()),
-            "subject_id":       post_id,
-            "title":            None,
-            "description":      data.get("full_text", None),
-            "content":          data.get("full_text", None),
-            "url":              self._build_post_url(screen_name, post_id),
-            "media_urls":       json.dumps(media_urls, ensure_ascii=False),
-            "comments":         data.get("replies", 0),
-            "shares":           data.get("retweets", 0),
-            "reactions":        data.get("likes", 0),
-            "favors":           0,
-            "views":            int(data.get("views_count", 0) or 0),
-            "web_tags":         "[]",
-            "web_keywords":     "[]",
-            "auth_id":          data.get("user_id", None),
-            "auth_name":        data.get("screen_name", None),
-            "auth_type":        self.auth_type,
-            "auth_url":         self._build_author_url(screen_name),
-            "source_id":        post_id,
-            "source_type":      self.source_type,
-            "source_name":      data.get("name", None),
-            "source_url":       self._build_post_url(screen_name, post_id),
-            "reply_to":         None,
-            "level":            None,
-            "sentiment":        0,
-            "isPriority":       False,
-            "crawl_bot":        self.crawl_bot,
+            "pub_time":          data.get("created_at_unix", 0),
+            "crawl_time":        int(datetime.now().timestamp()),
+            "subject_id":        post_id,
+            "title":             None,
+            "description":       data.get("full_text", None),
+            "content":           data.get("full_text", None),
+            "url":               self._build_post_url(screen_name, post_id),
+            "media_urls":        json.dumps(media_urls, ensure_ascii=False),
+            "comments":          data.get("replies", 0),
+            "shares":            data.get("retweets", 0),
+            "reactions":         data.get("likes", 0),
+            "favors":            0,
+            "views":             int(data.get("views_count", 0) or 0),
+            "web_tags":          "[]",
+            "web_keywords":      "[]",
+            "auth_id":           data.get("user_id", None),
+            "auth_name":         data.get("screen_name", None),
+            "auth_type":         self.auth_type,
+            "auth_url":          self._build_author_url(screen_name),
+            "source_id":         post_id,
+            "source_type":       self.source_type,
+            "source_name":       data.get("name", None),
+            "source_url":        self._build_post_url(screen_name, post_id),
+            "reply_to":          None,
+            "level":             None,
+            "sentiment":         0,
+            "isPriority":        False,
+            "crawl_bot":         self.crawl_bot,
         }
 
 
@@ -78,7 +134,6 @@ def clean_text(text: str) -> str:
     """Thay thế các ký tự xuống dòng bằng dấu cách."""
     if not text:
         return text
-    import re
     return re.sub(r'\n+', ' ', text).strip()
 
 
@@ -101,9 +156,9 @@ def extract_tweets(data: dict) -> list:
             for entry in instruction.get("entries", []):
                 tweet_result = (
                     entry.get("content", {})
-                        .get("itemContent", {})
-                        .get("tweet_results", {})
-                        .get("result", {})
+                         .get("itemContent", {})
+                         .get("tweet_results", {})
+                         .get("result", {})
                 )
                 legacy = tweet_result.get("legacy", {})
                 if not legacy:
@@ -118,12 +173,16 @@ def extract_tweets(data: dict) -> list:
                 user_core   = user_result.get("core", {})
                 avatar      = user_result.get("avatar", {})
 
-                # Lấy media URLs từ tweet (ảnh/video đính kèm)
+                # Media URLs đính kèm trong tweet
                 media_list = (
                     legacy.get("extended_entities", {}).get("media", [])
                     or legacy.get("entities", {}).get("media", [])
                 )
-                media_urls = [m.get("media_url_https", "") for m in media_list if m.get("media_url_https")]
+                media_urls = [
+                    m.get("media_url_https", "")
+                    for m in media_list
+                    if m.get("media_url_https")
+                ]
 
                 tweets.append({
                     "id_str":                  legacy.get("id_str", ""),
@@ -213,13 +272,21 @@ async def run():
             for tweet in extract_tweets(data):
                 all_tweets.append(x_post.new(tweet))
 
-        # Lưu ra data/data.json
+        # Push lên API
+        if all_tweets:
+            result = await post_to_es_unclassified(all_tweets)
+            print(f"[API] success={result['success']} | total={result['total']} | status={result['status']}")
+            if not result['success']:
+                print(f"[API] error: {result['error']}")
+        else:
+            print("[WARN] Không có tweet nào để push")
+
+        # Lưu ra data/data.json để debug
         output_dir = Path("data")
         output_dir.mkdir(exist_ok=True)
         output_file = output_dir / "data.json"
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(all_tweets, f, ensure_ascii=False, indent=2)
-
         print(f"[OK] Đã lưu {len(all_tweets)} posts ra: {output_file}")
 
         input("\nNhấn Enter để đóng...")

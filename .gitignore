@@ -4,6 +4,9 @@
 # Chrome session
 chrome_profile.json
 
+# Env
+.env
+
 # Data output
 data/
 
