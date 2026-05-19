@@ -6,19 +6,44 @@ import asyncio
 import json
 import os
 import re
+import random
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
 from urllib.parse import quote
 import httpx
 from dotenv import load_dotenv
+from motor.motor_asyncio import AsyncIOMotorClient
 from playwright.async_api import async_playwright
 
 load_dotenv()
 
 CHROME_EXECUTABLE = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 PROFILE_FILE      = "chrome_profile.json"
-KEYWORD           = "Bộ trưởng Bộ Công an"
+
+# ── MongoDB config ────────────────────────────────────────────────────────────
+MONGO_URI   = os.environ.get("MONGO_URI", "mongodb://root:@103.97.125.64:5525/")
+MONGO_DB    = "abp_warehouse"
+MONGO_COL   = "keyword"
+# ORG_IDS từ env, dạng: ORG_IDS=123,456,789
+ORG_IDS     = [int(x.strip()) for x in os.environ.get("ORG_IDS", "").split(",") if x.strip()]
+
+async def get_keywords_from_mongo(org_ids: list[int]) -> list[str]:
+    """Truy vấn keywords từ MongoDB theo danh sách org_id, platform=twitter."""
+    client = AsyncIOMotorClient(MONGO_URI)
+    try:
+        col = client[MONGO_DB][MONGO_COL]
+        cursor = col.find(
+            {"org_id": {"$in": org_ids}},
+            {"keyword": 1, "_id": 0},
+        )
+        docs = await cursor.to_list(length=None)
+        keywords = [d["keyword"] for d in docs if d.get("keyword")]
+        print(f"[MONGO] Tìm thấy {len(keywords)} keywords cho org_ids={org_ids}")
+        return keywords
+    finally:
+        client.close()
+
 
 # ── API config ────────────────────────────────────────────────────────────────
 HTTP_TIMEOUT = 30.0
@@ -86,10 +111,10 @@ async def post_to_es_unclassified(content: list) -> dict:
 # ── XPost class ───────────────────────────────────────────────────────────────
 class XPost:
     BASE_URL          = "https://x.com"
-    crawl_source      = 3
+    crawl_source      = 17
     crawl_source_code = "x"
     auth_type         = 1
-    source_type       = 6
+    source_type       = 17
     crawl_bot         = "x-1"
 
     def _build_post_url(self, screen_name: str, post_id: Optional[str]) -> str:
@@ -244,6 +269,15 @@ async def save_profile():
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 async def run():
+    if not ORG_IDS:
+        print("[ERROR] ORG_IDS chưa được set trong .env")
+        return
+
+    keywords = await get_keywords_from_mongo(ORG_IDS)
+    if not keywords:
+        print("[ERROR] Không tìm thấy keyword nào trong MongoDB")
+        return
+
     x_post = XPost()
 
     async with async_playwright() as p:
@@ -258,38 +292,55 @@ async def run():
         )
         page = await context.new_page()
 
-        api_responses = []
-
-        async def handle_response(response):
-            if "SearchTimeline" in response.url:
-                try:
-                    data = await response.json()
-                    api_responses.append(data)
-                    print(f"[API] {response.url[:80]}...")
-                except Exception as e:
-                    print(f"[WARN] {e}")
-
-        page.on("response", handle_response)
-
-        url = f"https://x.com/search?q={quote(KEYWORD)}&src=typed_query&f=live"
-        print(f"[1] Vào: {url}")
-        await page.goto(url, wait_until="domcontentloaded")
-        await page.wait_for_selector('[data-testid="tweet"]', timeout=15000)
-
-        # Extract → convert sang XPost format
         all_tweets = []
-        for data in api_responses:
-            for tweet in extract_tweets(data):
-                all_tweets.append(x_post.new(tweet))
 
-        # Push lên API
-        if all_tweets:
-            result = await post_to_es_unclassified(all_tweets)
-            print(f"[API] success={result['success']} | total={result['total']} | status={result['status']}")
-            if not result['success']:
-                print(f"[API] error: {result['error']}")
-        else:
-            print("[WARN] Không có tweet nào để push")
+        for keyword in keywords:
+            print(f"\n[KW] Tìm kiếm: {keyword}")
+            api_responses = []
+
+            async def handle_response(response):
+                if "SearchTimeline" in response.url:
+                    try:
+                        data = await response.json()
+                        api_responses.append(data)
+                        print(f"  [API] {response.url[:80]}...")
+                    except Exception as e:
+                        print(f"  [WARN] {e}")
+
+            page.on("response", handle_response)
+
+            url = f"https://x.com/search?q={quote(keyword)}&src=typed_query&f=live"
+            await page.goto(url, wait_until="domcontentloaded")
+            try:
+                await page.wait_for_selector('[data-testid="tweet"]', timeout=15000)
+            except Exception:
+                print(f"  [WARN] Không tìm thấy tweet cho: {keyword}")
+
+            page.remove_listener("response", handle_response)
+
+            # Extract tweets của keyword này
+            kw_tweets = []
+            for data in api_responses:
+                for tweet in extract_tweets(data):
+                    kw_tweets.append(x_post.new(tweet))
+
+            # Push ngay lên API trước khi sang keyword tiếp theo
+            if kw_tweets:
+                result = await post_to_es_unclassified(kw_tweets)
+                print(f"  [PUSH] success={result['success']} | total={result['total']} | status={result['status']}")
+                if not result['success']:
+                    print(f"  [PUSH] error: {result['error']}")
+                all_tweets.extend(kw_tweets)
+            else:
+                print(f"  [WARN] Không có tweet nào cho: {keyword}")
+
+            # Delay ngẫu nhiên 30-60s trước keyword tiếp theo
+            if keyword != keywords[-1]:
+                delay = random.randint(30, 60)
+                print(f"  [WAIT] Chờ {delay}s trước keyword tiếp theo...")
+                await asyncio.sleep(delay)
+
+        print(f"\n[OK] Tổng: {len(all_tweets)} tweets từ {len(keywords)} keywords")
 
         input("\nNhấn Enter để đóng...")
         await browser.close()
