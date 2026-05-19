@@ -6,7 +6,9 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+from urllib.parse import quote
 from playwright.async_api import async_playwright
 
 CHROME_EXECUTABLE = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
@@ -14,7 +16,128 @@ PROFILE_FILE      = "chrome_profile.json"
 KEYWORD           = "Biểu tình"
 
 
-# ── Lưu profile (chạy 1 lần nếu chưa có) ─────────────────────────────────────
+# ── XPost class ───────────────────────────────────────────────────────────────
+class XPost:
+    BASE_URL         = "https://x.com"
+    crawl_source     = 3
+    crawl_source_code = "x"
+    auth_type        = 1
+    source_type      = 6
+    crawl_bot        = "x-1"
+
+    def _build_post_url(self, screen_name: str, post_id: Optional[str]) -> str:
+        if not post_id:
+            return ""
+        return f"{self.BASE_URL}/{screen_name}/status/{post_id}"
+
+    def _build_author_url(self, screen_name: str) -> str:
+        return f"{self.BASE_URL}/{screen_name}"
+
+    def new(self, data: dict) -> dict:
+        screen_name = data.get("screen_name", "")
+        post_id     = data.get("id_str", None)
+        return {
+            "doc_type":         1,
+            "crawl_source":     self.crawl_source,
+            "crawl_source_code": self.crawl_source_code,
+            "pub_time":         data.get("created_at_unix", 0),
+            "crawl_time":       int(datetime.now().timestamp()),
+            "subject_id":       post_id,
+            "title":            None,
+            "description":      data.get("full_text", None),
+            "content":          data.get("full_text", None),
+            "url":              self._build_post_url(screen_name, post_id),
+            "media_urls":       "[]",
+            "comments":         data.get("replies", 0),
+            "shares":           data.get("retweets", 0),
+            "reactions":        data.get("likes", 0),
+            "favors":           0,
+            "views":            int(data.get("views_count", 0) or 0),
+            "web_tags":         "[]",
+            "web_keywords":     "[]",
+            "auth_id":          data.get("user_id", None),
+            "auth_name":        data.get("screen_name", None),
+            "auth_type":        self.auth_type,
+            "auth_url":         self._build_author_url(screen_name),
+            "source_id":        post_id,
+            "source_type":      self.source_type,
+            "source_name":      data.get("name", None),
+            "source_url":       self._build_post_url(screen_name, post_id),
+            "reply_to":         None,
+            "level":            None,
+            "sentiment":        0,
+            "isPriority":       False,
+            "crawl_bot":        self.crawl_bot,
+        }
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def to_unix(twitter_date: str) -> int:
+    """'Wed Jun 26 06:53:32 +0000 2024' → unix timestamp"""
+    if not twitter_date:
+        return 0
+    dt = datetime.strptime(twitter_date, "%a %b %d %H:%M:%S %z %Y")
+    return int(dt.timestamp())
+
+
+def extract_tweets(data: dict) -> list:
+    """Trích xuất tweet từ GraphQL SearchTimeline response."""
+    tweets = []
+    try:
+        instructions = (
+            data["data"]["search_by_raw_query"]["search_timeline"]["timeline"]["instructions"]
+        )
+        for instruction in instructions:
+            for entry in instruction.get("entries", []):
+                tweet_result = (
+                    entry.get("content", {})
+                        .get("itemContent", {})
+                        .get("tweet_results", {})
+                        .get("result", {})
+                )
+                legacy = tweet_result.get("legacy", {})
+                if not legacy:
+                    continue
+
+                user_result = (
+                    tweet_result.get("core", {})
+                                .get("user_results", {})
+                                .get("result", {})
+                )
+                user_legacy = user_result.get("legacy", {})
+                user_core   = user_result.get("core", {})
+                avatar      = user_result.get("avatar", {})
+
+                tweets.append({
+                    "id_str":                  legacy.get("id_str", ""),
+                    "user_id_str":             legacy.get("user_id_str", ""),
+                    "full_text":               legacy.get("full_text", ""),
+                    "created_at":              legacy.get("created_at", ""),
+                    "created_at_unix":         to_unix(legacy.get("created_at", "")),
+                    "likes":                   legacy.get("favorite_count", 0),
+                    "retweets":                legacy.get("retweet_count", 0),
+                    "replies":                 legacy.get("reply_count", 0),
+                    "views_count":             tweet_result.get("views", {}).get("count", "0"),
+                    "user_id":                 user_result.get("rest_id", ""),
+                    "screen_name":             user_core.get("screen_name", ""),
+                    "name":                    user_core.get("name", ""),
+                    "account_created_at":      user_core.get("created_at", ""),
+                    "account_created_at_unix": to_unix(user_core.get("created_at", "")),
+                    "image_url":               avatar.get("image_url", ""),
+                    "description":             user_legacy.get("description", ""),
+                    "followers_count":         user_legacy.get("followers_count", 0),
+                    "friends_count":           user_legacy.get("friends_count", 0),
+                    "fast_followers_count":    user_legacy.get("fast_followers_count", 0),
+                    "normal_followers_count":  user_legacy.get("normal_followers_count", 0),
+                    "media_count":             user_legacy.get("media_count", 0),
+                    "has_graduated_access":    user_result.get("has_graduated_access", False),
+                })
+    except (KeyError, TypeError):
+        pass
+    return tweets
+
+
+# ── Profile ───────────────────────────────────────────────────────────────────
 async def save_profile():
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -32,8 +155,10 @@ async def save_profile():
         await browser.close()
 
 
-# ── Chạy bot + intercept API ──────────────────────────────────────────────────
+# ── Run ───────────────────────────────────────────────────────────────────────
 async def run():
+    x_post = XPost()
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=False,
@@ -46,7 +171,6 @@ async def run():
         )
         page = await context.new_page()
 
-        # ── Intercept SearchTimeline API ──────────────────────────────────────
         api_responses = []
 
         async def handle_response(response):
@@ -54,114 +178,38 @@ async def run():
                 try:
                     data = await response.json()
                     api_responses.append(data)
-                    print(f"[API] Nhận response từ: {response.url[:80]}...")
-
-                    # Lấy danh sách tweet từ response
-                    tweets = extract_tweets(data)
-                    for tweet in tweets:
-                        print(f"  → [{tweet['created_at']}] @{tweet['user']}: {tweet['text'][:80]}")
+                    print(f"[API] {response.url[:80]}...")
                 except Exception as e:
-                    print(f"[WARN] Không parse được response: {e}")
+                    print(f"[WARN] {e}")
 
         page.on("response", handle_response)
-        # ──────────────────────────────────────────────────────────────────────
 
-        # Vào trang search
-        from urllib.parse import quote
         url = f"https://x.com/search?q={quote(KEYWORD)}&src=typed_query&f=live"
         print(f"[1] Vào: {url}")
         await page.goto(url, wait_until="domcontentloaded")
-        # Chờ tweet đầu tiên xuất hiện thay vì networkidle
         await page.wait_for_selector('[data-testid="tweet"]', timeout=15000)
 
-        print(f"\n[OK] Tổng số API response nhận được: {len(api_responses)}")
-
-        # Lấy tất cả tweets từ các response
+        # Extract → convert sang XPost format
         all_tweets = []
         for data in api_responses:
-            all_tweets.extend(extract_tweets(data))
+            for tweet in extract_tweets(data):
+                all_tweets.append(x_post.new(tweet))
 
         # Lưu ra data/data.json
         output_dir = Path("data")
         output_dir.mkdir(exist_ok=True)
         output_file = output_dir / "data.json"
-
         with open(output_file, "w", encoding="utf-8") as f:
             json.dump(all_tweets, f, ensure_ascii=False, indent=2)
 
-        print(f"[OK] Đã lưu {len(all_tweets)} tweets ra: {output_file}")
+        print(f"[OK] Đã lưu {len(all_tweets)} posts ra: {output_file}")
 
         input("\nNhấn Enter để đóng...")
         await browser.close()
 
 
-def to_unix(twitter_date: str) -> int:
-    """Đổi Twitter date string sang Unix timestamp (seconds).
-    Ví dụ: 'Wed Jun 26 06:53:32 +0000 2024' → 1719384812
-    """
-    if not twitter_date:
-        return 0
-    dt = datetime.strptime(twitter_date, "%a %b %d %H:%M:%S %z %Y")
-    return int(dt.timestamp())
-
-
-def extract_tweets(data: dict) -> list:
-    """Trích xuất tweet từ GraphQL response của SearchTimeline."""
-    tweets = []
-    try:
-        instructions = (
-            data["data"]["search_by_raw_query"]["search_timeline"]["timeline"]["instructions"]
-        )
-        for instruction in instructions:
-            entries = instruction.get("entries", [])
-            for entry in entries:
-                content = entry.get("content", {})
-                item_content = content.get("itemContent", {})
-                tweet_result = item_content.get("tweet_results", {}).get("result", {})
-
-                legacy = tweet_result.get("legacy", {})
-                if not legacy:
-                    continue
-
-                user_result = tweet_result.get("core", {}).get("user_results", {}).get("result", {})
-                user_legacy = user_result.get("legacy", {})
-                user_core   = user_result.get("core", {})
-                avatar      = user_result.get("avatar", {})
-
-                tweets.append({
-                    # Tweet
-                    "id_str":        legacy.get("id_str", ""),
-                    "user_id_str":   legacy.get("user_id_str", ""),
-                    "full_text":     legacy.get("full_text", ""),
-                    "created_at":    legacy.get("created_at", ""),
-                    "created_at_unix": to_unix(legacy.get("created_at", "")),
-                    "likes":         legacy.get("favorite_count", 0),
-                    "retweets":      legacy.get("retweet_count", 0),
-                    "replies":       legacy.get("reply_count", 0),
-                    "views_count":   tweet_result.get("views", {}).get("count", "0"),
-                    # User
-                    "user_id":           user_result.get("rest_id", ""),
-                    "screen_name":       user_core.get("screen_name", ""),
-                    "name":              user_core.get("name", ""),
-                    "account_created_at":      user_core.get("created_at", ""),
-                    "account_created_at_unix": to_unix(user_core.get("created_at", "")),
-                    "image_url":         avatar.get("image_url", ""),
-                    "description":       user_legacy.get("description", ""),
-                    "followers_count":   user_legacy.get("followers_count", 0),
-                    "friends_count":     user_legacy.get("friends_count", 0),
-                    "fast_followers_count": user_legacy.get("fast_followers_count", 0),
-                    "normal_followers_count": user_legacy.get("normal_followers_count", 0),
-                    "media_count":       user_legacy.get("media_count", 0),
-                    "has_graduated_access": user_result.get("has_graduated_access", False),
-                })
-    except (KeyError, TypeError):
-        pass
-    return tweets
-
-
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    import os
     if not os.path.exists(PROFILE_FILE):
         print(f"[INFO] Chưa có {PROFILE_FILE} → chạy save_profile()...")
         asyncio.run(save_profile())
