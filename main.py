@@ -56,6 +56,7 @@ async def post_to_es_unclassified(content: list) -> dict:
 
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
+            print(f"[API] Đang push {total} posts lên: {url_unclassified}")
             response = await client.post(url_unclassified, json=data)
             if response.status_code >= 400:
                 return {
