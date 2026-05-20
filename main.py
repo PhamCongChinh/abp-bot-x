@@ -4,6 +4,7 @@ Playwright - intercept X.com SearchTimeline API response.
 
 import asyncio
 import json
+import logging
 import os
 import re
 import random
@@ -12,9 +13,12 @@ from datetime import datetime
 from typing import Optional
 from urllib.parse import quote
 import httpx
+import requests
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 from playwright.async_api import async_playwright
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -346,10 +350,108 @@ async def run():
         await browser.close()
 
 
+# ── Run with GPM ─────────────────────────────────────────────────────────────
+async def run_gpm():
+    GPM_API    = os.environ.get("GPM_API", "")
+    PROFILE_ID = os.environ.get("GPM_PROFILE_ID", "")
+
+    if not GPM_API or not PROFILE_ID:
+        logger.error("[GPM] GPM_API hoặc GPM_PROFILE_ID chưa được set trong .env")
+        return
+
+    if not ORG_IDS:
+        logger.error("[ERROR] ORG_IDS chưa được set trong .env")
+        return
+
+    keywords = await get_keywords_from_mongo(ORG_IDS)
+    if not keywords:
+        logger.error("[ERROR] Không tìm thấy keyword nào trong MongoDB")
+        return
+
+    # ── Start GPM profile ─────────────────────────────────────────────────────
+    resp = requests.get(f"{GPM_API}/profiles/start/{PROFILE_ID}")
+    resp.raise_for_status()
+    debug_addr = resp.json()["data"]["remote_debugging_address"]
+    logger.info(f"[GPM] Profile started, debug_addr={debug_addr}")
+
+    x_post  = XPost()
+    browser = None
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.connect_over_cdp(f"http://{debug_addr}")
+            if not browser.contexts:
+                raise Exception("No browser context found from GPM")
+            context = browser.contexts[0]
+
+            page = await context.new_page()
+            all_tweets = []
+
+            for keyword in keywords:
+                print(f"\n[KW] Tìm kiếm: {keyword}")
+                api_responses = []
+
+                async def handle_response(response):
+                    if "SearchTimeline" in response.url:
+                        try:
+                            data = await response.json()
+                            api_responses.append(data)
+                            print(f"  [API] {response.url[:80]}...")
+                        except Exception as e:
+                            print(f"  [WARN] {e}")
+
+                page.on("response", handle_response)
+
+                url = f"https://x.com/search?q={quote(keyword)}&src=typed_query&f=live"
+                await page.goto(url, wait_until="domcontentloaded")
+                try:
+                    await page.wait_for_selector('[data-testid="tweet"]', timeout=15000)
+                except Exception:
+                    print(f"  [WARN] Không tìm thấy tweet cho: {keyword}")
+
+                page.remove_listener("response", handle_response)
+
+                kw_tweets = []
+                for data in api_responses:
+                    for tweet in extract_tweets(data):
+                        kw_tweets.append(x_post.new(tweet))
+
+                if kw_tweets:
+                    result = await post_to_es_unclassified(kw_tweets)
+                    print(f"  [PUSH] success={result['success']} | total={result['total']} | status={result['status']}")
+                    if not result['success']:
+                        print(f"  [PUSH] error: {result['error']}")
+                    all_tweets.extend(kw_tweets)
+                else:
+                    print(f"  [WARN] Không có tweet nào cho: {keyword}")
+
+                if keyword != keywords[-1]:
+                    delay = random.randint(30, 60)
+                    print(f"  [WAIT] Chờ {delay}s trước keyword tiếp theo...")
+                    await asyncio.sleep(delay)
+
+            print(f"\n[OK] Tổng: {len(all_tweets)} tweets từ {len(keywords)} keywords")
+
+    except Exception as e:
+        logger.exception(f"Error in run_gpm(): {e}")
+    finally:
+        try:
+            if browser:
+                await browser.close()
+        except Exception:
+            pass
+        try:
+            requests.get(f"{GPM_API}/profiles/close/{PROFILE_ID}")
+            logger.info("[GPM] Profile stopped")
+        except Exception as e:
+            logger.error(f"Failed to stop GPM profile: {e}")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if not os.path.exists(PROFILE_FILE):
-        print(f"[INFO] Chưa có {PROFILE_FILE} → chạy save_profile()...")
-        asyncio.run(save_profile())
-    else:
-        asyncio.run(run())
+    # if not os.path.exists(PROFILE_FILE):
+    #     print(f"[INFO] Chưa có {PROFILE_FILE} → chạy save_profile()...")
+    #     asyncio.run(save_profile())
+    # else:
+    #     asyncio.run(run())
+    
+    asyncio.run(run_gpm())
