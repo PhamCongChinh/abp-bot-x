@@ -76,12 +76,12 @@ async def post_to_es_unclassified(content: list) -> dict:
     }
 
     # Lưu ra data/data.json
-    output_dir = Path("data")
-    output_dir.mkdir(exist_ok=True)
-    output_file = output_dir / "data.json"
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    print(f"[OK] Đã lưu {total} posts ra: {output_file}")
+    # output_dir = Path("data")
+    # output_dir.mkdir(exist_ok=True)
+    # output_file = output_dir / "data.json"
+    # with open(output_file, "w", encoding="utf-8") as f:
+    #     json.dump(data, f, ensure_ascii=False, indent=2)
+    # print(f"[OK] Đã lưu {total} posts ra: {output_file}")
 
     try:
         async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as client:
@@ -412,7 +412,14 @@ async def run_gpm():
                 raise Exception("No browser context found from GPM")
             context = browser.contexts[0]
 
-            page = await context.new_page()
+            # Dùng lại tab đang mở sẵn thay vì tạo tab mới (tránh mất session)
+            pages = context.pages
+            if pages:
+                page = pages[0]
+                print(f"[GPM] Dùng lại tab đang mở: {page.url}")
+            else:
+                page = await context.new_page()
+                print("[GPM] Không có tab nào, tạo tab mới")
             all_tweets = []
 
             for keyword in keywords:
