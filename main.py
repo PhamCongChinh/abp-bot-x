@@ -376,9 +376,21 @@ async def run_gpm():
     print(f"[GPM] Start response: {resp_json}")
 
     data = resp_json.get("data") if resp_json else None
+
+    # Nếu profile đã mở sẵn (ALREADY_OPEN), lấy debug_addr từ endpoint active
     if not data:
-        logger.error(f"[GPM] Không lấy được 'data' từ response: {resp_json}")
-        return
+        message = (resp_json or {}).get("message", "")
+        if "ALREADY_OPEN" in message:
+            print("[GPM] Profile đã mở sẵn, lấy debug_addr từ /profiles/active...")
+            active_resp = requests.get(f"{GPM_API}/profiles/active/{PROFILE_ID}")
+            active_resp.raise_for_status()
+            active_json = active_resp.json()
+            print(f"[GPM] Active response: {active_json}")
+            data = active_json.get("data") if active_json else None
+
+        if not data:
+            logger.error(f"[GPM] Không lấy được 'data' từ response: {resp_json}")
+            return
 
     debug_addr = data.get("remote_debugging_address") or data.get("remote_debugging_port")
     if not debug_addr:
