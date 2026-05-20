@@ -515,4 +515,17 @@ if __name__ == "__main__":
     # else:
     #     asyncio.run(run())
     
-    asyncio.run(run_gpm())
+    async def main():
+        while True:
+            start = datetime.now()
+            print(f"\n[MAIN] Bắt đầu lúc {start.strftime('%Y-%m-%d %H:%M:%S')}")
+            try:
+                await run_gpm()
+            except Exception as e:
+                logger.exception(f"[MAIN] Lỗi không mong muốn: {e}")
+            elapsed = (datetime.now() - start).total_seconds()
+            wait = max(0, 3600 - elapsed)
+            print(f"[MAIN] Xong. Chờ {int(wait)}s trước lần chạy tiếp theo...")
+            await asyncio.sleep(wait)
+
+    asyncio.run(main())
