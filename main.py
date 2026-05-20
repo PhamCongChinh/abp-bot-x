@@ -371,7 +371,24 @@ async def run_gpm():
     # ── Start GPM profile ─────────────────────────────────────────────────────
     resp = requests.get(f"{GPM_API}/profiles/start/{PROFILE_ID}")
     resp.raise_for_status()
-    debug_addr = resp.json()["data"]["remote_debugging_address"]
+    resp_json = resp.json()
+    logger.info(f"[GPM] Start response: {resp_json}")
+    print(f"[GPM] Start response: {resp_json}")
+
+    data = resp_json.get("data") if resp_json else None
+    if not data:
+        logger.error(f"[GPM] Không lấy được 'data' từ response: {resp_json}")
+        return
+
+    debug_addr = data.get("remote_debugging_address") or data.get("remote_debugging_port")
+    if not debug_addr:
+        logger.error(f"[GPM] Không tìm thấy remote_debugging_address trong data: {data}")
+        return
+
+    # Nếu chỉ trả về port (số nguyên), ghép thành địa chỉ đầy đủ
+    if str(debug_addr).isdigit():
+        debug_addr = f"127.0.0.1:{debug_addr}"
+
     logger.info(f"[GPM] Profile started, debug_addr={debug_addr}")
 
     x_post  = XPost()
