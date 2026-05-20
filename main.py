@@ -408,6 +408,21 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
             print(f"[GPM:{profile_id}] Chờ {wait_time}s để trình duyệt load...")
             await asyncio.sleep(wait_time)
 
+            # # Chặn font, stylesheet, image, media để tăng tốc load
+            # blocked_types   = {"font", "stylesheet", "image", "media"}
+            # blocked_domains = {"abs.twimg.com", "pbs.twimg.com", "ton.twimg.com"}
+
+            # async def block_resources(route, request):
+            #     if request.resource_type in blocked_types:
+            #         await route.abort()
+            #     elif any(d in request.url for d in blocked_domains):
+            #         await route.abort()
+            #     else:
+            #         await route.continue_()
+
+            # await page.route("**/*", block_resources)
+            # print(f"[GPM:{profile_id}] Đã bật chặn font/style/image")
+
             all_tweets = []
 
             for keyword in keywords:
@@ -476,8 +491,8 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
                     print(f"  [GPM:{profile_id}][WARN] Không có tweet nào cho: {keyword}")
 
                 if keyword != keywords[-1]:
-                    delay = random.randint(30, 60)
-                    print(f"  [GPM:{profile_id}][WAIT] Chờ {delay}s...")
+                    delay = random.randint(120, 240)
+                    print(f"  [GPM:{profile_id}][WAIT] Chờ {delay}s ({delay//60}p{delay%60}s) trước keyword tiếp theo...")
                     await asyncio.sleep(delay)
 
             print(f"\n[GPM:{profile_id}][OK] Tổng: {len(all_tweets)} tweets từ {len(keywords)} keywords")
