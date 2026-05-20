@@ -420,6 +420,11 @@ async def run_gpm():
             else:
                 page = await context.new_page()
                 print("[GPM] Không có tab nào, tạo tab mới")
+
+            # Chờ trình duyệt load xong trước khi bắt đầu tìm kiếm
+            wait_time = random.randint(5, 7)
+            print(f"[GPM] Chờ {wait_time}s để trình duyệt load...")
+            await asyncio.sleep(wait_time)
             all_tweets = []
 
             for keyword in keywords:
@@ -443,6 +448,14 @@ async def run_gpm():
                     await page.wait_for_selector('[data-testid="tweet"]', timeout=15000)
                 except Exception:
                     print(f"  [WARN] Không tìm thấy tweet cho: {keyword}")
+
+                # Scroll 3-7 lần để load thêm tweet
+                scroll_times = random.randint(3, 7)
+                print(f"  [SCROLL] Scroll {scroll_times} lần...")
+                for i in range(scroll_times):
+                    await page.evaluate("window.scrollBy(0, window.innerHeight)")
+                    delay = random.uniform(1, 2)
+                    await asyncio.sleep(delay)
 
                 page.remove_listener("response", handle_response)
 
