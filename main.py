@@ -427,12 +427,33 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
 
                 url = f"https://x.com/search?q={quote(keyword)}&src=typed_query&f=live"
                 await page.goto(url, wait_until="domcontentloaded")
+
+                # Chờ 1-3s sau khi vào trang tìm kiếm
+                pre_wait = random.uniform(1, 3)
+                print(f"  [GPM:{profile_id}][WAIT] Chờ {pre_wait:.1f}s sau khi vào trang...")
+                await asyncio.sleep(pre_wait)
+
                 try:
                     await page.wait_for_selector('[data-testid="tweet"]', timeout=15000)
                 except Exception:
                     print(f"  [GPM:{profile_id}][WARN] Không tìm thấy tweet cho: {keyword}")
 
-                scroll_times = random.randint(3, 7)
+                # Click "Hiển thị thêm" nếu có
+                try:
+                    show_more = page.get_by_text("Hiển thị thêm", exact=True).first
+                    await show_more.wait_for(timeout=3000)
+                    await show_more.click()
+                    print(f"  [GPM:{profile_id}][CLICK] Đã click 'Hiển thị thêm'")
+                    await asyncio.sleep(1)
+                except Exception:
+                    pass  # Không có nút thì bỏ qua
+
+                # Chờ 1-3s trước khi scroll
+                pre_scroll_wait = random.uniform(1, 3)
+                print(f"  [GPM:{profile_id}][WAIT] Chờ {pre_scroll_wait:.1f}s trước khi scroll...")
+                await asyncio.sleep(pre_scroll_wait)
+
+                scroll_times = random.randint(5, 10)
                 print(f"  [GPM:{profile_id}][SCROLL] Scroll {scroll_times} lần...")
                 for _ in range(scroll_times):
                     await page.evaluate("window.scrollBy(0, window.innerHeight)")
