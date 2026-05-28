@@ -435,10 +435,6 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
                 page = await context.new_page()
                 print(f"[GPM:{profile_id}] Không có tab nào, tạo tab mới")
 
-            wait_time = random.randint(5, 7)
-            print(f"[GPM:{profile_id}] Chờ {wait_time}s để trình duyệt load...")
-            await asyncio.sleep(wait_time)
-
             # # Chặn font, stylesheet, image, media để tăng tốc load
             # blocked_types   = {"font", "stylesheet", "image", "media"}
             # blocked_domains = {"abs.twimg.com", "pbs.twimg.com", "ton.twimg.com"}
