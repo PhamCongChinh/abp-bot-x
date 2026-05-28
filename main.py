@@ -484,16 +484,6 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
                 except Exception:
                     print(f"  [GPM:{profile_id}][WARN] Không tìm thấy tweet cho: {keyword}")
 
-                # Click "Hiển thị thêm" nếu có
-                try:
-                    show_more = page.get_by_text("Hiển thị thêm", exact=True).first
-                    await show_more.wait_for(timeout=3000)
-                    await show_more.click()
-                    print(f"  [GPM:{profile_id}][CLICK] Đã click 'Hiển thị thêm'")
-                    await asyncio.sleep(1)
-                except Exception:
-                    pass  # Không có nút thì bỏ qua
-
                 # Chờ 1-3s trước khi scroll
                 pre_scroll_wait = random.uniform(1, 3)
                 print(f"  [GPM:{profile_id}][WAIT] Chờ {pre_scroll_wait:.1f}s trước khi scroll...")
