@@ -387,11 +387,27 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
 
     print(f"[GPM:{profile_id}] debug_addr={debug_addr}")
 
+    # Chờ browser GPM khởi động xong (retry 10 lần, mỗi lần 2s)
+    print(f"[GPM:{profile_id}] Chờ browser khởi động...")
+    await asyncio.sleep(3)
+
     x_post  = XPost()
     browser = None
     try:
         async with async_playwright() as p:
-            browser = await p.chromium.connect_over_cdp(f"http://{debug_addr}")
+            # Retry connect nếu browser chưa sẵn sàng
+            for attempt in range(1, 11):
+                try:
+                    browser = await p.chromium.connect_over_cdp(f"http://{debug_addr}")
+                    print(f"[GPM:{profile_id}] Kết nối thành công (attempt {attempt})")
+                    break
+                except Exception as e:
+                    if attempt < 10:
+                        print(f"[GPM:{profile_id}] Attempt {attempt} failed, retry sau 2s...")
+                        await asyncio.sleep(2)
+                    else:
+                        raise Exception(f"Không thể kết nối sau 10 lần thử: {e}")
+
             if not browser.contexts:
                 raise Exception("No browser context found from GPM")
             context = browser.contexts[0]
