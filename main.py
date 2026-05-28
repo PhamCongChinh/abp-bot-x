@@ -552,6 +552,10 @@ if __name__ == "__main__":
     #     asyncio.run(run())
     
     async def main():
+        interval_minutes = int(os.environ.get("RUN_INTERVAL_MINUTES", "30"))
+        interval_seconds = interval_minutes * 60
+        print(f"[MAIN] Interval: {interval_minutes} phút ({interval_seconds}s)")
+
         while True:
             start = datetime.now()
             print(f"\n[MAIN] Bắt đầu lúc {start.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -560,8 +564,8 @@ if __name__ == "__main__":
             except Exception as e:
                 logger.exception(f"[MAIN] Lỗi không mong muốn: {e}")
             elapsed = (datetime.now() - start).total_seconds()
-            wait = max(0, 3600 - elapsed)
-            print(f"[MAIN] Xong. Chờ {int(wait)}s trước lần chạy tiếp theo...")
+            wait = max(0, interval_seconds - elapsed)
+            print(f"[MAIN] Xong. Chờ {int(wait)}s ({int(wait/60)}p) trước lần chạy tiếp theo...")
             await asyncio.sleep(wait)
 
     asyncio.run(main())
