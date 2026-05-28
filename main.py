@@ -387,9 +387,24 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
 
     print(f"[GPM:{profile_id}] debug_addr={debug_addr}")
 
-    # Chờ browser GPM khởi động xong (retry 10 lần, mỗi lần 2s)
-    print(f"[GPM:{profile_id}] Chờ browser khởi động...")
-    await asyncio.sleep(3)
+    # Chờ browser GPM khởi động xong, sau đó lấy lại port từ /active để chắc chắn
+    print(f"[GPM:{profile_id}] Chờ 5s để browser khởi động...")
+    await asyncio.sleep(5)
+
+    # Lấy lại debug_addr từ endpoint active để đảm bảo port đúng
+    try:
+        active_resp = requests.get(f"{gpm_api}/profiles/active/{profile_id}")
+        active_resp.raise_for_status()
+        active_json = active_resp.json()
+        if active_json.get("data"):
+            active_addr = active_json["data"].get("remote_debugging_address") or active_json["data"].get("remote_debugging_port")
+            if active_addr:
+                if str(active_addr).isdigit():
+                    active_addr = f"127.0.0.1:{active_addr}"
+                debug_addr = active_addr
+                print(f"[GPM:{profile_id}] Lấy lại debug_addr từ /active: {debug_addr}")
+    except Exception as e:
+        print(f"[GPM:{profile_id}] Không lấy được /active, dùng port ban đầu: {e}")
 
     x_post  = XPost()
     browser = None
@@ -403,8 +418,8 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
                     break
                 except Exception as e:
                     if attempt < 10:
-                        print(f"[GPM:{profile_id}] Attempt {attempt} failed, retry sau 2s...")
-                        await asyncio.sleep(2)
+                        print(f"[GPM:{profile_id}] Attempt {attempt} failed: {str(e)[:100]}, retry sau 3s...")
+                        await asyncio.sleep(3)
                     else:
                         raise Exception(f"Không thể kết nối sau 10 lần thử: {e}")
 
