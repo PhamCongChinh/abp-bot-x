@@ -399,6 +399,9 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
 
     x_post  = XPost()
     browser = None
+    
+    # Thử dùng Selenium driver thay vì CDP nếu remote debugging không hoạt động
+    driver_path = None
     try:
         async with async_playwright() as p:
             # Retry connect nếu browser chưa sẵn sàng
@@ -424,6 +427,10 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
                         await asyncio.sleep(3)
             
             if not browser:
+                print(f"[GPM:{profile_id}] ⚠ Không thể connect qua CDP sau 10 lần thử")
+                print(f"[GPM:{profile_id}] ℹ GPM có thể chưa bật remote debugging")
+                print(f"[GPM:{profile_id}] ℹ Hướng dẫn: Vào GPM Settings → bật Remote Debugging")
+                print(f"[GPM:{profile_id}] ℹ Hoặc mở profile thủ công trong GPM trước khi chạy script")
                 raise Exception(f"Không thể kết nối sau 10 lần thử. Lỗi cuối: {last_error}")
 
             if not browser.contexts:
