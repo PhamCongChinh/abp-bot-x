@@ -353,75 +353,78 @@ async def run():
 # ── Run with GPM ─────────────────────────────────────────────────────────────
 async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str):
     """Crawl toàn bộ keywords với 1 GPM profile."""
-    print(f"\n[GPM:{profile_id}] Đang start profile...")
+    print(f"\n[GPM:{profile_id}] Kiểm tra profile...")
 
-    # ── Start profile ─────────────────────────────────────────────────────────
-    resp = requests.get(f"{gpm_api}/profiles/start/{profile_id}")
-    resp.raise_for_status()
-    resp_json = resp.json()
-    print(f"[GPM:{profile_id}] Start response: {resp_json}")
-
-    data = resp_json.get("data") if resp_json else None
-
-    if not data:
-        message = (resp_json or {}).get("message", "")
-        if "ALREADY_OPEN" in message:
-            print(f"[GPM:{profile_id}] Profile đã mở sẵn, lấy debug_addr từ /profiles/active...")
-            active_resp = requests.get(f"{gpm_api}/profiles/active/{profile_id}")
-            active_resp.raise_for_status()
-            active_json = active_resp.json()
-            print(f"[GPM:{profile_id}] Active response: {active_json}")
-            data = active_json.get("data") if active_json else None
-
-        if not data:
-            logger.error(f"[GPM:{profile_id}] Không lấy được 'data': {resp_json}")
-            return
-
-    debug_addr = data.get("remote_debugging_address") or data.get("remote_debugging_port")
-    if not debug_addr:
-        logger.error(f"[GPM:{profile_id}] Không tìm thấy remote_debugging_address: {data}")
-        return
-
-    if str(debug_addr).isdigit():
-        debug_addr = f"127.0.0.1:{debug_addr}"
-
-    print(f"[GPM:{profile_id}] debug_addr={debug_addr}")
-
-    # Chờ browser GPM khởi động xong, sau đó lấy lại port từ /active để chắc chắn
-    print(f"[GPM:{profile_id}] Chờ 5s để browser khởi động...")
-    await asyncio.sleep(5)
-
-    # Lấy lại debug_addr từ endpoint active để đảm bảo port đúng
+    # ── Kiểm tra profile đã mở chưa ──────────────────────────────────────────
     try:
         active_resp = requests.get(f"{gpm_api}/profiles/active/{profile_id}")
         active_resp.raise_for_status()
         active_json = active_resp.json()
-        if active_json.get("data"):
-            active_addr = active_json["data"].get("remote_debugging_address") or active_json["data"].get("remote_debugging_port")
-            if active_addr:
-                if str(active_addr).isdigit():
-                    active_addr = f"127.0.0.1:{active_addr}"
-                debug_addr = active_addr
-                print(f"[GPM:{profile_id}] Lấy lại debug_addr từ /active: {debug_addr}")
+        print(f"[GPM:{profile_id}] Active check: {active_json}")
+        
+        # Nếu đã mở, dùng luôn
+        if active_json.get("data") and active_json["data"].get("remote_debugging_address"):
+            debug_addr = active_json["data"]["remote_debugging_address"]
+            if str(debug_addr).isdigit():
+                debug_addr = f"127.0.0.1:{debug_addr}"
+            print(f"[GPM:{profile_id}] Profile đã mở sẵn, debug_addr={debug_addr}")
+        else:
+            # Chưa mở → start profile
+            print(f"[GPM:{profile_id}] Profile chưa mở, đang start...")
+            resp = requests.get(f"{gpm_api}/profiles/start/{profile_id}")
+            resp.raise_for_status()
+            resp_json = resp.json()
+            print(f"[GPM:{profile_id}] Start response: {resp_json}")
+            
+            data = resp_json.get("data")
+            if not data:
+                logger.error(f"[GPM:{profile_id}] Không lấy được 'data': {resp_json}")
+                return
+            
+            debug_addr = data.get("remote_debugging_address") or data.get("remote_debugging_port")
+            if not debug_addr:
+                logger.error(f"[GPM:{profile_id}] Không tìm thấy remote_debugging_address: {data}")
+                return
+            
+            if str(debug_addr).isdigit():
+                debug_addr = f"127.0.0.1:{debug_addr}"
+            
+            print(f"[GPM:{profile_id}] debug_addr={debug_addr}")
+            print(f"[GPM:{profile_id}] Chờ 8s để browser khởi động...")
+            await asyncio.sleep(8)
+    
     except Exception as e:
-        print(f"[GPM:{profile_id}] Không lấy được /active, dùng port ban đầu: {e}")
+        logger.error(f"[GPM:{profile_id}] Lỗi khi kiểm tra/start profile: {e}")
+        return
 
     x_post  = XPost()
     browser = None
     try:
         async with async_playwright() as p:
             # Retry connect nếu browser chưa sẵn sàng
+            last_error = None
             for attempt in range(1, 11):
                 try:
+                    print(f"[GPM:{profile_id}] Attempt {attempt}/10: Đang connect tới http://{debug_addr}...")
                     browser = await p.chromium.connect_over_cdp(f"http://{debug_addr}")
-                    print(f"[GPM:{profile_id}] Kết nối thành công (attempt {attempt})")
+                    print(f"[GPM:{profile_id}] ✓ Kết nối thành công!")
                     break
                 except Exception as e:
-                    if attempt < 10:
-                        print(f"[GPM:{profile_id}] Attempt {attempt} failed: {str(e)[:100]}, retry sau 3s...")
-                        await asyncio.sleep(3)
+                    last_error = e
+                    error_msg = str(e)
+                    if "ECONNREFUSED" in error_msg:
+                        print(f"[GPM:{profile_id}] ✗ Attempt {attempt}: Port chưa mở")
+                    elif "timeout" in error_msg.lower():
+                        print(f"[GPM:{profile_id}] ✗ Attempt {attempt}: Timeout")
                     else:
-                        raise Exception(f"Không thể kết nối sau 10 lần thử: {e}")
+                        print(f"[GPM:{profile_id}] ✗ Attempt {attempt}: {error_msg[:150]}")
+                    
+                    if attempt < 10:
+                        print(f"[GPM:{profile_id}] Chờ 3s rồi thử lại...")
+                        await asyncio.sleep(3)
+            
+            if not browser:
+                raise Exception(f"Không thể kết nối sau 10 lần thử. Lỗi cuối: {last_error}")
 
             if not browser.contexts:
                 raise Exception("No browser context found from GPM")
