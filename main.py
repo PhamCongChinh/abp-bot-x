@@ -495,7 +495,7 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
                 print(f"  [GPM:{profile_id}][WAIT] Chờ {pre_scroll_wait:.1f}s trước khi scroll...")
                 await asyncio.sleep(pre_scroll_wait)
 
-                scroll_times = random.randint(5, 10)
+                scroll_times = random.randint(10, 20)
                 print(f"  [GPM:{profile_id}][SCROLL] Scroll {scroll_times} lần...")
                 for _ in range(scroll_times):
                     await page.evaluate("window.scrollBy(0, window.innerHeight)")
