@@ -156,7 +156,7 @@ class XPost:
             "auth_name":         data.get("screen_name", None),
             "auth_type":         self.auth_type,
             "auth_url":          self._build_author_url(screen_name),
-            "source_id":         post_id,
+            "source_id":         data.get("user_id", None),
             "source_type":       self.source_type,
             "source_name":       data.get("name", None),
             "source_url":        self._build_post_url(screen_name, post_id),
