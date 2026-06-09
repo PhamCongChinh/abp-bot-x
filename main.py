@@ -43,6 +43,7 @@ async def get_keywords_from_mongo(org_ids: list[int]) -> list[str]:
         )
         docs = await cursor.to_list(length=None)
         keywords = [d["keyword"] for d in docs if d.get("keyword")]
+        random.shuffle(keywords)
         print(f"[MONGO] Tìm thấy {len(keywords)} keywords cho org_ids={org_ids}")
         return keywords
     finally:
