@@ -539,7 +539,7 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
 
         # ── Chờ trước keyword tiếp theo ───────────────────────────────────────
         if idx < len(keywords) - 1:
-            delay = random.randint(120, 240)
+            delay = random.randint(240, 420)
             print(f"  [GPM:{profile_id}][WAIT] Chờ {delay}s ({delay//60}p{delay%60}s) trước keyword tiếp theo...")
             await asyncio.sleep(delay)
 
