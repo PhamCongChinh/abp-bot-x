@@ -352,118 +352,122 @@ async def run():
 
 
 # ── Run with GPM ─────────────────────────────────────────────────────────────
-async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str):
-    """Crawl toàn bộ keywords với 1 GPM profile."""
-    print(f"\n[GPM:{profile_id}] Kiểm tra profile...")
-
-    # ── Kiểm tra profile đã mở chưa ──────────────────────────────────────────
+async def _start_profile(profile_id: str, gpm_api: str) -> Optional[str]:
+    """Mở GPM profile và trả về debug_addr, hoặc None nếu thất bại."""
     try:
         active_resp = requests.get(f"{gpm_api}/profiles/active/{profile_id}")
         active_resp.raise_for_status()
         active_json = active_resp.json()
         print(f"[GPM:{profile_id}] Active check: {active_json}")
-        
-        # Nếu đã mở, dùng luôn
+
         if active_json.get("data") and active_json["data"].get("remote_debugging_address"):
             debug_addr = active_json["data"]["remote_debugging_address"]
             if str(debug_addr).isdigit():
                 debug_addr = f"127.0.0.1:{debug_addr}"
             print(f"[GPM:{profile_id}] Profile đã mở sẵn, debug_addr={debug_addr}")
-        else:
-            # Chưa mở → start profile
-            print(f"[GPM:{profile_id}] Profile chưa mở, đang start...")
-            resp = requests.get(f"{gpm_api}/profiles/start/{profile_id}")
-            resp.raise_for_status()
-            resp_json = resp.json()
-            print(f"[GPM:{profile_id}] Start response: {resp_json}")
-            
-            data = resp_json.get("data")
-            if not data:
-                logger.error(f"[GPM:{profile_id}] Không lấy được 'data': {resp_json}")
-                return
-            
-            debug_addr = data.get("remote_debugging_address") or data.get("remote_debugging_port")
-            if not debug_addr:
-                logger.error(f"[GPM:{profile_id}] Không tìm thấy remote_debugging_address: {data}")
-                return
-            
-            if str(debug_addr).isdigit():
-                debug_addr = f"127.0.0.1:{debug_addr}"
-            
-            print(f"[GPM:{profile_id}] debug_addr={debug_addr}")
-            print(f"[GPM:{profile_id}] Chờ 8s để browser khởi động...")
-            await asyncio.sleep(8)
-    
+            return debug_addr
+
+        print(f"[GPM:{profile_id}] Profile chưa mở, đang start...")
+        resp = requests.get(f"{gpm_api}/profiles/start/{profile_id}")
+        resp.raise_for_status()
+        resp_json = resp.json()
+        print(f"[GPM:{profile_id}] Start response: {resp_json}")
+
+        data = resp_json.get("data")
+        if not data:
+            logger.error(f"[GPM:{profile_id}] Không lấy được 'data': {resp_json}")
+            return None
+
+        debug_addr = data.get("remote_debugging_address") or data.get("remote_debugging_port")
+        if not debug_addr:
+            logger.error(f"[GPM:{profile_id}] Không tìm thấy remote_debugging_address: {data}")
+            return None
+
+        if str(debug_addr).isdigit():
+            debug_addr = f"127.0.0.1:{debug_addr}"
+
+        print(f"[GPM:{profile_id}] debug_addr={debug_addr}")
+        print(f"[GPM:{profile_id}] Chờ 8s để browser khởi động...")
+        await asyncio.sleep(8)
+        return debug_addr
+
     except Exception as e:
         logger.error(f"[GPM:{profile_id}] Lỗi khi kiểm tra/start profile: {e}")
-        return
+        return None
 
-    x_post  = XPost()
-    browser = None
-    
-    # Thử dùng Selenium driver thay vì CDP nếu remote debugging không hoạt động
-    driver_path = None
+
+async def _close_profile(profile_id: str, gpm_api: str, browser=None):
+    """Đóng browser playwright và GPM profile."""
     try:
-        async with async_playwright() as p:
-            # Retry connect nếu browser chưa sẵn sàng
-            last_error = None
-            for attempt in range(1, 11):
-                try:
-                    print(f"[GPM:{profile_id}] Attempt {attempt}/10: Đang connect tới http://{debug_addr}...")
-                    browser = await p.chromium.connect_over_cdp(f"http://{debug_addr}")
-                    print(f"[GPM:{profile_id}] ✓ Kết nối thành công!")
-                    break
-                except Exception as e:
-                    last_error = e
-                    error_msg = str(e)
-                    if "ECONNREFUSED" in error_msg:
-                        print(f"[GPM:{profile_id}] ✗ Attempt {attempt}: Port chưa mở")
-                    elif "timeout" in error_msg.lower():
-                        print(f"[GPM:{profile_id}] ✗ Attempt {attempt}: Timeout")
-                    else:
-                        print(f"[GPM:{profile_id}] ✗ Attempt {attempt}: {error_msg[:150]}")
-                    
-                    if attempt < 10:
-                        print(f"[GPM:{profile_id}] Chờ 3s rồi thử lại...")
-                        await asyncio.sleep(3)
-            
-            if not browser:
-                print(f"[GPM:{profile_id}] ⚠ Không thể connect qua CDP sau 10 lần thử")
-                print(f"[GPM:{profile_id}] ℹ GPM có thể chưa bật remote debugging")
-                print(f"[GPM:{profile_id}] ℹ Hướng dẫn: Vào GPM Settings → bật Remote Debugging")
-                print(f"[GPM:{profile_id}] ℹ Hoặc mở profile thủ công trong GPM trước khi chạy script")
-                raise Exception(f"Không thể kết nối sau 10 lần thử. Lỗi cuối: {last_error}")
+        if browser:
+            await browser.close()
+    except Exception:
+        pass
+    try:
+        requests.get(f"{gpm_api}/profiles/close/{profile_id}")
+        print(f"[GPM:{profile_id}] Profile đã đóng")
+    except Exception as e:
+        logger.error(f"[GPM:{profile_id}] Failed to stop profile: {e}")
 
-            if not browser.contexts:
-                raise Exception("No browser context found from GPM")
-            context = browser.contexts[0]
 
-            pages = context.pages
-            if pages:
-                page = pages[0]
-                print(f"[GPM:{profile_id}] Dùng lại tab: {page.url}")
-            else:
-                page = await context.new_page()
-                print(f"[GPM:{profile_id}] Không có tab nào, tạo tab mới")
+async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str):
+    """Crawl toàn bộ keywords với 1 GPM profile.
+    Mỗi keyword: mở profile → crawl → đóng profile → chờ.
+    """
+    x_post     = XPost()
+    all_tweets = []
 
-            # # Chặn font, stylesheet, image, media để tăng tốc load
-            # blocked_types   = {"font", "stylesheet", "image", "media"}
-            # blocked_domains = {"abs.twimg.com", "pbs.twimg.com", "ton.twimg.com"}
+    for idx, keyword in enumerate(keywords):
+        # ── Mở profile ────────────────────────────────────────────────────────
+        debug_addr = await _start_profile(profile_id, gpm_api)
+        if not debug_addr:
+            print(f"[GPM:{profile_id}] Bỏ qua keyword '{keyword}' do không start được profile")
+            continue
 
-            # async def block_resources(route, request):
-            #     if request.resource_type in blocked_types:
-            #         await route.abort()
-            #     elif any(d in request.url for d in blocked_domains):
-            #         await route.abort()
-            #     else:
-            #         await route.continue_()
+        browser = None
+        try:
+            async with async_playwright() as p:
+                last_error = None
+                for attempt in range(1, 11):
+                    try:
+                        print(f"[GPM:{profile_id}] Attempt {attempt}/10: Đang connect tới http://{debug_addr}...")
+                        browser = await p.chromium.connect_over_cdp(f"http://{debug_addr}")
+                        print(f"[GPM:{profile_id}] ✓ Kết nối thành công!")
+                        break
+                    except Exception as e:
+                        last_error = e
+                        error_msg = str(e)
+                        if "ECONNREFUSED" in error_msg:
+                            print(f"[GPM:{profile_id}] ✗ Attempt {attempt}: Port chưa mở")
+                        elif "timeout" in error_msg.lower():
+                            print(f"[GPM:{profile_id}] ✗ Attempt {attempt}: Timeout")
+                        else:
+                            print(f"[GPM:{profile_id}] ✗ Attempt {attempt}: {error_msg[:150]}")
 
-            # await page.route("**/*", block_resources)
-            # print(f"[GPM:{profile_id}] Đã bật chặn font/style/image")
+                        if attempt < 10:
+                            print(f"[GPM:{profile_id}] Chờ 3s rồi thử lại...")
+                            await asyncio.sleep(3)
 
-            all_tweets = []
+                if not browser:
+                    print(f"[GPM:{profile_id}] ⚠ Không thể connect qua CDP sau 10 lần thử")
+                    print(f"[GPM:{profile_id}] ℹ GPM có thể chưa bật remote debugging")
+                    print(f"[GPM:{profile_id}] ℹ Hướng dẫn: Vào GPM Settings → bật Remote Debugging")
+                    print(f"[GPM:{profile_id}] ℹ Hoặc mở profile thủ công trong GPM trước khi chạy script")
+                    raise Exception(f"Không thể kết nối sau 10 lần thử. Lỗi cuối: {last_error}")
 
-            for keyword in keywords:
+                if not browser.contexts:
+                    raise Exception("No browser context found from GPM")
+                context = browser.contexts[0]
+
+                pages = context.pages
+                if pages:
+                    page = pages[0]
+                    print(f"[GPM:{profile_id}] Dùng lại tab: {page.url}")
+                else:
+                    page = await context.new_page()
+                    print(f"[GPM:{profile_id}] Không có tab nào, tạo tab mới")
+
+                # ── Crawl keyword ─────────────────────────────────────────────
                 print(f"\n[GPM:{profile_id}][KW] Tìm kiếm: {keyword}")
                 api_responses = []
 
@@ -481,7 +485,6 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
                 url = f"https://x.com/search?q={quote(keyword)}&src=typed_query&f=live"
                 await page.goto(url, wait_until="domcontentloaded")
 
-                # Chờ 1-3s sau khi vào trang tìm kiếm
                 pre_wait = random.uniform(1, 3)
                 print(f"  [GPM:{profile_id}][WAIT] Chờ {pre_wait:.1f}s sau khi vào trang...")
                 await asyncio.sleep(pre_wait)
@@ -491,7 +494,6 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
                 except Exception:
                     print(f"  [GPM:{profile_id}][WARN] Không tìm thấy tweet cho: {keyword}")
 
-                # Chờ 1-3s trước khi scroll
                 pre_scroll_wait = random.uniform(1, 3)
                 print(f"  [GPM:{profile_id}][WAIT] Chờ {pre_scroll_wait:.1f}s trước khi scroll...")
                 await asyncio.sleep(pre_scroll_wait)
@@ -526,26 +528,19 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
                 else:
                     print(f"  [GPM:{profile_id}][WARN] Không có tweet nào cho: {keyword}")
 
-                if keyword != keywords[-1]:
-                    delay = random.randint(120, 240)
-                    print(f"  [GPM:{profile_id}][WAIT] Chờ {delay}s ({delay//60}p{delay%60}s) trước keyword tiếp theo...")
-                    await asyncio.sleep(delay)
-
-            print(f"\n[GPM:{profile_id}][OK] Tổng: {len(all_tweets)} tweets từ {len(keywords)} keywords")
-
-    except Exception as e:
-        logger.exception(f"[GPM:{profile_id}] Error: {e}")
-    finally:
-        try:
-            if browser:
-                await browser.close()
-        except Exception:
-            pass
-        try:
-            requests.get(f"{gpm_api}/profiles/close/{profile_id}")
-            print(f"[GPM:{profile_id}] Profile stopped")
         except Exception as e:
-            logger.error(f"[GPM:{profile_id}] Failed to stop profile: {e}")
+            logger.exception(f"[GPM:{profile_id}] Error crawling keyword '{keyword}': {e}")
+
+        # ── Đóng profile sau mỗi keyword ──────────────────────────────────────
+        await _close_profile(profile_id, gpm_api, browser)
+
+        # ── Chờ trước keyword tiếp theo ───────────────────────────────────────
+        if idx < len(keywords) - 1:
+            delay = random.randint(120, 240)
+            print(f"  [GPM:{profile_id}][WAIT] Chờ {delay}s ({delay//60}p{delay%60}s) trước keyword tiếp theo...")
+            await asyncio.sleep(delay)
+
+    print(f"\n[GPM:{profile_id}][OK] Tổng: {len(all_tweets)} tweets từ {len(keywords)} keywords")
 
 
 async def run_gpm():
