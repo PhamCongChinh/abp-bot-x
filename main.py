@@ -507,6 +507,13 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
                 for _ in range(scroll_times):
                     await page.evaluate("window.scrollBy(0, window.innerHeight)")
                     await asyncio.sleep(random.uniform(2, 10))
+                    show_more = page.locator('span:has-text("Show more"), span:has-text("Hiển thị thêm")').first
+                    try:
+                        if await show_more.is_visible(timeout=500):
+                            await show_more.click()
+                            print(f"  [GPM:{profile_id}][CLICK] Show more")
+                    except Exception:
+                        pass
 
                 page.remove_listener("response", handle_response)
 
