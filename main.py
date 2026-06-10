@@ -514,6 +514,14 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
                     print(f"  [GPM:{profile_id}][PUSH] success={result['success']} | total={result['total']} | status={result['status']}")
                     if not result['success']:
                         print(f"  [GPM:{profile_id}][PUSH] error: {result['error']}")
+                    if result['success']:
+                        out_dir = Path("data")
+                        out_dir.mkdir(exist_ok=True)
+                        out_file = out_dir / f"posts_{datetime.now().strftime('%Y%m%d')}.json"
+                        existing = json.loads(out_file.read_text(encoding="utf-8")) if out_file.exists() else []
+                        existing.extend(kw_tweets)
+                        out_file.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+                        print(f"  [GPM:{profile_id}][FILE] Đã ghi {len(kw_tweets)} posts → {out_file}")
                     all_tweets.extend(kw_tweets)
                 else:
                     print(f"  [GPM:{profile_id}][WARN] Không có tweet nào cho: {keyword}")
