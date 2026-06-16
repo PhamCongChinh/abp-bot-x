@@ -471,7 +471,7 @@ async def _run_single_profile(profile_id: str, keywords: list[str], gpm_api: str
                     page = await context.new_page()
                     print(f"[GPM:{profile_id}] Không có tab nào, tạo tab mới")
 
-                blocked_types = {"font", "stylesheet", "image", "media", "ping", "other"}
+                blocked_types = {"font", "stylesheet", "css", "image", "media", "ping", "other"}
                 async def block_resources(route, request):
                     if request.resource_type in blocked_types:
                         await route.abort()
